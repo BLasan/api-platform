@@ -72,11 +72,12 @@ func (v *Validator) Validate(config *api.APIConfiguration) []ValidationError {
 		})
 	}
 
+	// Validate data section
 	if config.Kind == "http/websub" {
 		errors = append(errors, v.validateAsyncData(&config.Data)...)
+	} else {
+		errors = append(errors, v.validateData(&config.Data)...)
 	}
-	// Validate data section
-	errors = append(errors, v.validateData(&config.Data)...)
 
 	return errors
 }
@@ -421,7 +422,7 @@ func (v *Validator) validateQueryParametersForAsyncAPIs(path string) bool {
 	}
 
 	// Ensure 'type' exists and at least one non-empty value is present
-	if ts, ok := values["type"]; ok && len(ts) > 0 {
+	if ts, ok := values["topic"]; ok && len(ts) > 0 {
 		for _, v := range ts {
 			if strings.TrimSpace(v) != "" {
 				return true

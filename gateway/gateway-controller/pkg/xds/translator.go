@@ -223,6 +223,13 @@ func (t *Translator) TranslateAsyncConfigs(configs []*models.StoredAPIConfig, co
 	for _, c := range clusterMap {
 		clusters = append(clusters, c)
 	}
+	// Add dynamic forward proxy cluster for WebSubHub
+	dynamicForwardProxyCluster := t.createDynamicForwardProxyCluster()
+	clusters = append(clusters, dynamicForwardProxyCluster)
+
+	// Add external processor gRPC cluster
+	extProcessorCluster := t.createExternalProcessorCluster()
+	clusters = append(clusters, extProcessorCluster)
 
 	resources[resource.ListenerType] = listeners
 	resources[resource.RouteType] = routes
@@ -543,6 +550,72 @@ func (t *Translator) createCluster(name string, upstreamURL *url.URL) *cluster.C
 	}
 }
 
+// createDynamicForwardProxyCluster creates a dynamic forward proxy cluster for WebSubHub
+func (t *Translator) createDynamicForwardProxyCluster() *cluster.Cluster {
+	// Note: Due to go-control-plane API limitations, we use a placeholder Any for the typed config
+	// The actual DNS cache config should match the filter config in createListenerForWebSubHub
+	clusterTypeAny := &anypb.Any{
+		TypeUrl: "type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig",
+	}
+
+	return &cluster.Cluster{
+		Name:           "dynamic_forward_proxy_cluster",
+		ConnectTimeout: durationpb.New(5 * time.Second),
+		LbPolicy:       cluster.Cluster_CLUSTER_PROVIDED,
+		ClusterDiscoveryType: &cluster.Cluster_ClusterType{
+			ClusterType: &cluster.Cluster_CustomClusterType{
+				Name:        "envoy.clusters.dynamic_forward_proxy",
+				TypedConfig: clusterTypeAny,
+			},
+		},
+		UpstreamConnectionOptions: &cluster.UpstreamConnectionOptions{
+			TcpKeepalive: &core.TcpKeepalive{
+				KeepaliveTime: &wrapperspb.UInt32Value{Value: 300},
+			},
+		},
+	}
+}
+
+// createExternalProcessorCluster creates the external processor gRPC cluster
+func (t *Translator) createExternalProcessorCluster() *cluster.Cluster {
+	// Create HTTP/2 protocol options for gRPC
+	http2Options := &anypb.Any{
+		TypeUrl: "type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions",
+	}
+
+	return &cluster.Cluster{
+		Name:                 "ext-processor-grpc-service",
+		ConnectTimeout:       durationpb.New(5 * time.Second),
+		ClusterDiscoveryType: &cluster.Cluster_Type{Type: cluster.Cluster_STRICT_DNS},
+		LbPolicy:             cluster.Cluster_ROUND_ROBIN,
+		TypedExtensionProtocolOptions: map[string]*anypb.Any{
+			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": http2Options,
+		},
+		LoadAssignment: &endpoint.ClusterLoadAssignment{
+			ClusterName: "ext-processor-grpc-service",
+			Endpoints: []*endpoint.LocalityLbEndpoints{{
+				LbEndpoints: []*endpoint.LbEndpoint{{
+					HostIdentifier: &endpoint.LbEndpoint_Endpoint{
+						Endpoint: &endpoint.Endpoint{
+							Address: &core.Address{
+								Address: &core.Address_SocketAddress{
+									SocketAddress: &core.SocketAddress{
+										Protocol: core.SocketAddress_TCP,
+										Address:  "host.docker.internal",
+										PortSpecifier: &core.SocketAddress_PortValue{
+											PortValue: 9001,
+										},
+									},
+								},
+							},
+						},
+					},
+				}},
+			}},
+		},
+	}
+}
+
 // pathToRegex converts a path with parameters to a regex pattern
 // Converts paths like /{country_code}/{city} to ^/[^/]+/[^/]+$
 func (t *Translator) pathToRegex(path string) string {
@@ -588,7 +661,7 @@ func (t *Translator) createAccessLogConfig() ([]*accesslog.AccessLog, error) {
 	if t.accessLogConfig.Format == "json" {
 		// Use JSON log format fields from config
 		jsonFormat := t.accessLogConfig.JSONFields
-		if jsonFormat == nil || len(jsonFormat) == 0 {
+		if len(jsonFormat) == 0 {
 			return nil, fmt.Errorf("json_fields not configured in access log config")
 		}
 
