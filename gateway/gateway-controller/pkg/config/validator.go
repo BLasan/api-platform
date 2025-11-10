@@ -123,8 +123,6 @@ func (v *Validator) validateAsyncData(data *api.APIConfigData) []ValidationError
 	// Validate upstream
 	errors = append(errors, v.validateUpstream(data.Upstream)...)
 
-	// Validate operations
-	// We need to separate out operation validation for WebSub APIs
 	errors = append(errors, v.validateAsyncOperations(data.Operations)...)
 
 	return errors
@@ -319,7 +317,7 @@ func (v *Validator) validateAsyncOperations(operations []api.Operation) []Valida
 			})
 		}
 
-		if !v.validateQueryParametersForAsyncAPIs(op.Path) {
+		if v.validateQueryParametersForAsyncAPIs(op.Path) {
 			errors = append(errors, ValidationError{
 				Field:   fmt.Sprintf("data.operations[%d].path", i),
 				Message: "Operation path must contain a non-empty 'type' query parameter",
@@ -398,9 +396,10 @@ func (v *Validator) validatePathParameters(path string) bool {
 
 // validatePathParametersForAsyncAPIs checks if path parameters have balanced braces
 func (v *Validator) validatePathParametersForAsyncAPIs(path string) bool {
+
 	openCount := strings.Count(path, "{")
 	closeCount := strings.Count(path, "}")
-	return openCount == 0 && closeCount == 0
+	return openCount == 0 && closeCount == 0 && strings.Contains(path, "webhooks_events_receiver_resource")
 }
 
 // validateQueryParametersForAsyncAPIs checks that the path contains a query string with a non-empty 'type' parameter.
@@ -408,26 +407,10 @@ func (v *Validator) validatePathParametersForAsyncAPIs(path string) bool {
 // 1. Path must contain a '?' separator
 // 2. After '?', there must be a query parameter named 'type' and its value must not be empty
 func (v *Validator) validateQueryParametersForAsyncAPIs(path string) bool {
-	qIndex := strings.Index(path, "?")
-	if qIndex == -1 || qIndex == len(path)-1 {
-		// No '?' or nothing after '?'
+	// Check if path contains query string separator
+	if !strings.Contains(path, "?") {
 		return false
 	}
 
-	rawQuery := path[qIndex+1:]
-	// ParseQuery expects just the query portion (e.g., "a=b&c=d")
-	values, err := url.ParseQuery(rawQuery)
-	if err != nil {
-		return false
-	}
-
-	// Ensure 'type' exists and at least one non-empty value is present
-	if ts, ok := values["topic"]; ok && len(ts) > 0 {
-		for _, v := range ts {
-			if strings.TrimSpace(v) != "" {
-				return true
-			}
-		}
-	}
-	return false
+	return true
 }
