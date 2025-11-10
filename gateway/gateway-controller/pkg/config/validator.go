@@ -65,15 +65,66 @@ func (v *Validator) Validate(config *api.APIConfiguration) []ValidationError {
 	}
 
 	// Validate kind
-	if config.Kind != "http/rest" {
+	if config.Kind != "http/rest" && config.Kind != "http/websub" {
 		errors = append(errors, ValidationError{
 			Field:   "kind",
-			Message: "Unsupported API kind (only 'http/rest' is supported)",
+			Message: "Unsupported API kind (only 'http/rest' and 'http/websub' are supported)",
 		})
 	}
 
+	if config.Kind == "http/websub" {
+		errors = append(errors, v.validateAsyncData(&config.Data)...)
+	}
 	// Validate data section
 	errors = append(errors, v.validateData(&config.Data)...)
+
+	return errors
+}
+
+// validateData validates the data section of the configuration
+func (v *Validator) validateAsyncData(data *api.APIConfigData) []ValidationError {
+	var errors []ValidationError
+
+	// Validate name
+	if data.Name == "" {
+		errors = append(errors, ValidationError{
+			Field:   "data.name",
+			Message: "API name is required",
+		})
+	} else if len(data.Name) > 100 {
+		errors = append(errors, ValidationError{
+			Field:   "data.name",
+			Message: "API name must be 1-100 characters",
+		})
+	} else if !v.urlFriendlyNameRegex.MatchString(data.Name) {
+		errors = append(errors, ValidationError{
+			Field:   "data.name",
+			Message: "API name must be URL-friendly (only letters, numbers, spaces, hyphens, underscores, and dots allowed)",
+		})
+	}
+
+	// Validate version
+	if data.Version == "" {
+		errors = append(errors, ValidationError{
+			Field:   "data.version",
+			Message: "API version is required",
+		})
+	} else if !v.versionRegex.MatchString(data.Version) {
+		errors = append(errors, ValidationError{
+			Field:   "data.version",
+			Message: "API version must follow semantic versioning pattern (e.g., v1.0, v2.1.3)",
+		})
+	}
+
+	// Validate context
+	errors = append(errors, v.validateContext(data.Context)...)
+
+	// Validate upstream
+	errors = append(errors, v.validateUpstream(data.Upstream)...)
+
+	// Validate operations
+	// We need to separate out operation validation for WebSub APIs
+	errors = append(errors, v.validateAsyncOperations(data.Operations)...)
 
 	return errors
 }
@@ -120,6 +171,7 @@ func (v *Validator) validateData(data *api.APIConfigData) []ValidationError {
 	errors = append(errors, v.validateUpstream(data.Upstream)...)
 
 	// Validate operations
+	// We need to separate out operation validation for WebSub APIs
 	errors = append(errors, v.validateOperations(data.Operations)...)
 
 	return errors
@@ -212,6 +264,71 @@ func (v *Validator) validateUpstream(upstream []api.Upstream) []ValidationError 
 	return errors
 }
 
+// validateAsyncOperations validates the operations configuration
+func (v *Validator) validateAsyncOperations(operations []api.Operation) []ValidationError {
+	var errors []ValidationError
+
+	if len(operations) == 0 {
+		errors = append(errors, ValidationError{
+			Field:   "data.operations",
+			Message: "At least one operation is required",
+		})
+		return errors
+	}
+
+	validMethods := map[string]bool{
+		"POST": true,
+	}
+
+	for i, op := range operations {
+		// Validate method
+		if op.Method == "" {
+			errors = append(errors, ValidationError{
+				Field:   fmt.Sprintf("data.operations[%d].method", i),
+				Message: "HTTP method is required",
+			})
+		} else if !validMethods[strings.ToUpper(string(op.Method))] {
+			errors = append(errors, ValidationError{
+				Field:   fmt.Sprintf("data.operations[%d].method", i),
+				Message: fmt.Sprintf("Invalid HTTP method '%s' (must be POST)", op.Method),
+			})
+		}
+
+		// Validate path
+		if op.Path == "" {
+			errors = append(errors, ValidationError{
+				Field:   fmt.Sprintf("data.operations[%d].path", i),
+				Message: "Operation path is required",
+			})
+			continue
+		}
+
+		if !strings.HasPrefix(op.Path, "/") {
+			errors = append(errors, ValidationError{
+				Field:   fmt.Sprintf("data.operations[%d].path", i),
+				Message: "Operation path must start with /",
+			})
+		}
+
+		// Validate path parameters have balanced braces
+		if !v.validatePathParametersForAsyncAPIs(op.Path) {
+			errors = append(errors, ValidationError{
+				Field:   fmt.Sprintf("data.operations[%d].path", i),
+				Message: "Operation path has braces which is not allowed",
+			})
+		}
+
+		if !v.validateQueryParametersForAsyncAPIs(op.Path) {
+			errors = append(errors, ValidationError{
+				Field:   fmt.Sprintf("data.operations[%d].path", i),
+				Message: "Operation path must contain a non-empty 'type' query parameter",
+			})
+		}
+	}
+
+	return errors
+}
+
 // validateOperations validates the operations configuration
 func (v *Validator) validateOperations(operations []api.Operation) []ValidationError {
 	var errors []ValidationError
@@ -276,4 +393,40 @@ func (v *Validator) validatePathParameters(path string) bool {
 	openCount := strings.Count(path, "{")
 	closeCount := strings.Count(path, "}")
 	return openCount == closeCount
+}
+
+// validatePathParametersForAsyncAPIs checks if path parameters have balanced braces
+func (v *Validator) validatePathParametersForAsyncAPIs(path string) bool {
+	openCount := strings.Count(path, "{")
+	closeCount := strings.Count(path, "}")
+	return openCount == 0 && closeCount == 0
+}
+
+// validateQueryParametersForAsyncAPIs checks that the path contains a query string with a non-empty 'type' parameter.
+// Rules:
+// 1. Path must contain a '?' separator
+// 2. After '?', there must be a query parameter named 'type' and its value must not be empty
+func (v *Validator) validateQueryParametersForAsyncAPIs(path string) bool {
+	qIndex := strings.Index(path, "?")
+	if qIndex == -1 || qIndex == len(path)-1 {
+		// No '?' or nothing after '?'
+		return false
+	}
+
+	rawQuery := path[qIndex+1:]
+	// ParseQuery expects just the query portion (e.g., "a=b&c=d")
+	values, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return false
+	}
+
+	// Ensure 'type' exists and at least one non-empty value is present
+	if ts, ok := values["type"]; ok && len(ts) > 0 {
+		for _, v := range ts {
+			if strings.TrimSpace(v) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
