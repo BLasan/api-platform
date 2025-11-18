@@ -23,11 +23,12 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"github.com/wso2/api-platform/gateway/gateway-controller/pkg/models"
 	"net/http"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/wso2/api-platform/gateway/gateway-controller/pkg/models"
 
 	"github.com/gorilla/websocket"
 	"github.com/wso2/api-platform/gateway/gateway-controller/pkg/config"

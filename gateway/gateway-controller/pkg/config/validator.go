@@ -65,25 +65,41 @@ func (v *Validator) Validate(config *api.APIConfiguration) []ValidationError {
 	}
 
 	// Validate kind
-	if config.Kind != "http/rest" && config.Kind != "http/websub" {
+	if config.Kind != "http/rest" && config.Kind != "async/websub" {
 		errors = append(errors, ValidationError{
 			Field:   "kind",
-			Message: "Unsupported API kind (only 'http/rest' and 'http/websub' are supported)",
+			Message: "Unsupported API kind (only 'http/rest' and 'async/websub' are supported)",
 		})
 	}
 
 	// Validate data section
-	if config.Kind == "http/websub" {
-		errors = append(errors, v.validateAsyncData(&config.Data)...)
+	if config.Kind == "async/websub" {
+		configParsed, err := config.Data.AsWebhookAPIData()
+		if err != nil {
+			errors = append(errors, ValidationError{
+				Field:   "data",
+				Message: fmt.Sprintf("Failed to parse configuration data: %v", err),
+			})
+			return errors
+		}
+		errors = append(errors, v.validateAsyncData(&configParsed)...)
 	} else {
-		errors = append(errors, v.validateData(&config.Data)...)
+		configParsed, err := config.Data.AsAPIConfigData()
+		if err != nil {
+			errors = append(errors, ValidationError{
+				Field:   "data",
+				Message: fmt.Sprintf("Failed to parse configuration data: %v", err),
+			})
+			return errors
+		}
+		errors = append(errors, v.validateRestData(&configParsed)...)
 	}
 
 	return errors
 }
 
 // validateData validates the data section of the configuration
-func (v *Validator) validateAsyncData(data *api.APIConfigData) []ValidationError {
+func (v *Validator) validateAsyncData(data *api.WebhookAPIData) []ValidationError {
 	var errors []ValidationError
 
 	// Validate name
@@ -121,15 +137,15 @@ func (v *Validator) validateAsyncData(data *api.APIConfigData) []ValidationError
 	errors = append(errors, v.validateContext(data.Context)...)
 
 	// Validate upstream
-	errors = append(errors, v.validateUpstream(data.Upstream)...)
+	errors = append(errors, v.validateServer(data.Servers)...)
 
-	errors = append(errors, v.validateAsyncOperations(data.Operations)...)
+	errors = append(errors, v.validateChannels(data.Channels)...)
 
 	return errors
 }
 
 // validateData validates the data section of the configuration
-func (v *Validator) validateData(data *api.APIConfigData) []ValidationError {
+func (v *Validator) validateRestData(data *api.APIConfigData) []ValidationError {
 	var errors []ValidationError
 
 	// Validate name
@@ -212,11 +228,11 @@ func (v *Validator) validateContext(context string) []ValidationError {
 	return errors
 }
 
-// validateUpstream validates the upstream configuration
-func (v *Validator) validateUpstream(upstream []api.Upstream) []ValidationError {
+// validateServer validates the server configuration
+func (v *Validator) validateServer(server []api.Server) []ValidationError {
 	var errors []ValidationError
 
-	if len(upstream) == 0 {
+	if len(server) == 0 {
 		errors = append(errors, ValidationError{
 			Field:   "data.upstream",
 			Message: "At least one upstream URL is required",
@@ -224,7 +240,7 @@ func (v *Validator) validateUpstream(upstream []api.Upstream) []ValidationError 
 		return errors
 	}
 
-	for i, up := range upstream {
+	for i, up := range server {
 		if up.Url == "" {
 			errors = append(errors, ValidationError{
 				Field:   fmt.Sprintf("data.upstream[%d].url", i),
@@ -263,64 +279,99 @@ func (v *Validator) validateUpstream(upstream []api.Upstream) []ValidationError 
 	return errors
 }
 
-// validateAsyncOperations validates the operations configuration
-func (v *Validator) validateAsyncOperations(operations []api.Operation) []ValidationError {
+// validateUpstream validates the upstream configuration
+func (v *Validator) validateUpstream(server []api.Upstream) []ValidationError {
 	var errors []ValidationError
 
-	if len(operations) == 0 {
+	if len(server) == 0 {
 		errors = append(errors, ValidationError{
-			Field:   "data.operations",
-			Message: "At least one operation is required",
+			Field:   "data.upstream",
+			Message: "At least one upstream URL is required",
 		})
 		return errors
 	}
 
-	validMethods := map[string]bool{
-		"POST": true,
-	}
-
-	for i, op := range operations {
-		// Validate method
-		if op.Method == "" {
+	for i, up := range server {
+		if up.Url == "" {
 			errors = append(errors, ValidationError{
-				Field:   fmt.Sprintf("data.operations[%d].method", i),
-				Message: "HTTP method is required",
-			})
-		} else if !validMethods[strings.ToUpper(string(op.Method))] {
-			errors = append(errors, ValidationError{
-				Field:   fmt.Sprintf("data.operations[%d].method", i),
-				Message: fmt.Sprintf("Invalid HTTP method '%s' (must be POST)", op.Method),
-			})
-		}
-
-		// Validate path
-		if op.Path == "" {
-			errors = append(errors, ValidationError{
-				Field:   fmt.Sprintf("data.operations[%d].path", i),
-				Message: "Operation path is required",
+				Field:   fmt.Sprintf("data.upstream[%d].url", i),
+				Message: "Upstream URL is required",
 			})
 			continue
 		}
 
-		if !strings.HasPrefix(op.Path, "/") {
+		// Validate URL format
+		parsedURL, err := url.Parse(up.Url)
+		if err != nil {
 			errors = append(errors, ValidationError{
-				Field:   fmt.Sprintf("data.operations[%d].path", i),
-				Message: "Operation path must start with /",
+				Field:   fmt.Sprintf("data.upstream[%d].url", i),
+				Message: fmt.Sprintf("Invalid URL format: %v", err),
+			})
+			continue
+		}
+
+		// Ensure scheme is http or https
+		if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+			errors = append(errors, ValidationError{
+				Field:   fmt.Sprintf("data.upstream[%d].url", i),
+				Message: "Upstream URL must use http or https scheme",
 			})
 		}
+
+		// Ensure host is present
+		if parsedURL.Host == "" {
+			errors = append(errors, ValidationError{
+				Field:   fmt.Sprintf("data.upstream[%d].url", i),
+				Message: "Upstream URL must include a host",
+			})
+		}
+	}
+
+	return errors
+}
+
+// validateChannels validates the channels configuration
+func (v *Validator) validateChannels(channels []api.Channel) []ValidationError {
+	var errors []ValidationError
+
+	if len(channels) == 0 {
+		errors = append(errors, ValidationError{
+			Field:   "data.channels",
+			Message: "At least one channel is required",
+		})
+		return errors
+	}
+
+	for i, op := range channels {
+
+		// Validate path
+		if op.Path == "" {
+			errors = append(errors, ValidationError{
+				Field:   fmt.Sprintf("data.channels[%d].path", i),
+				Message: "Channel path is required",
+			})
+			continue
+		}
+
+		// if !strings.HasPrefix(op.Path, "/") {
+		// 	errors = append(errors, ValidationError{
+		// 		Field:   fmt.Sprintf("data.channels[%d].path", i),
+		// 		Message: "Channel path must start with /",
+		// 	})
+		// }
 
 		// Validate path parameters have balanced braces
 		if !v.validatePathParametersForAsyncAPIs(op.Path) {
 			errors = append(errors, ValidationError{
-				Field:   fmt.Sprintf("data.operations[%d].path", i),
+				Field:   fmt.Sprintf("data.channels[%d].path", i),
 				Message: "Operation path has braces which is not allowed",
 			})
 		}
 
-		if v.validateQueryParametersForAsyncAPIs(op.Path) {
+		if !v.validatePathParametersForAsyncAPIs(op.Path) {
 			errors = append(errors, ValidationError{
-				Field:   fmt.Sprintf("data.operations[%d].path", i),
-				Message: "Operation path must contain a non-empty 'type' query parameter",
+				Field:   fmt.Sprintf("data.channels[%d].path", i),
+				Message: "Channel path has unbalanced braces in parameters",
 			})
 		}
 	}
@@ -340,24 +391,7 @@ func (v *Validator) validateOperations(operations []api.Operation) []ValidationE
 		return errors
 	}
 
-	validMethods := map[string]bool{
-		"GET": true, "POST": true, "PUT": true, "DELETE": true,
-		"PATCH": true, "HEAD": true, "OPTIONS": true,
-	}
-
 	for i, op := range operations {
-		// Validate method
-		if op.Method == "" {
-			errors = append(errors, ValidationError{
-				Field:   fmt.Sprintf("data.operations[%d].method", i),
-				Message: "HTTP method is required",
-			})
-		} else if !validMethods[strings.ToUpper(string(op.Method))] {
-			errors = append(errors, ValidationError{
-				Field:   fmt.Sprintf("data.operations[%d].method", i),
-				Message: fmt.Sprintf("Invalid HTTP method '%s' (must be GET, POST, PUT, DELETE, PATCH, HEAD, or OPTIONS)", op.Method),
-			})
-		}
 
 		// Validate path
 		if op.Path == "" {

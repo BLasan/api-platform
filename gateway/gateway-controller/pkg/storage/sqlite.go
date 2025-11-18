@@ -109,8 +109,23 @@ func (s *SQLiteStorage) SaveConfig(cfg *models.StoredAPIConfig) error {
 	// Extract fields for indexed columns
 	name := cfg.GetAPIName()
 	version := cfg.GetAPIVersion()
-	context := cfg.Configuration.Data.Context
+	var context string
+	//context := cfg.Configuration.Data.Context
 	kind := string(cfg.Configuration.Kind)
+	switch kind {
+	case "http/rest":
+		apiData, err := cfg.Configuration.Data.AsAPIConfigData()
+		if err != nil {
+			return fmt.Errorf("failed to parse API config data: %w", err)
+		}
+		context = apiData.Context
+	case "async/websub":
+		asyncData, err := cfg.Configuration.Data.AsWebhookAPIData()
+		if err != nil {
+			return fmt.Errorf("failed to parse webhook API data: %w", err)
+		}
+		context = asyncData.Context
+	}
 
 	query := `
 		INSERT INTO api_configs (
@@ -169,8 +184,23 @@ func (s *SQLiteStorage) UpdateConfig(cfg *models.StoredAPIConfig) error {
 	// Extract fields for indexed columns
 	name := cfg.GetAPIName()
 	version := cfg.GetAPIVersion()
-	context := cfg.Configuration.Data.Context
+	var context string
+	//context := cfg.Configuration.Data.Context
 	kind := string(cfg.Configuration.Kind)
+	switch kind {
+	case "http/rest":
+		apiData, err := cfg.Configuration.Data.AsAPIConfigData()
+		if err != nil {
+			return fmt.Errorf("failed to parse API config data: %w", err)
+		}
+		context = apiData.Context
+	case "async/websub":
+		asyncData, err := cfg.Configuration.Data.AsWebhookAPIData()
+		if err != nil {
+			return fmt.Errorf("failed to parse webhook API data: %w", err)
+		}
+		context = asyncData.Context
+	}
 
 	query := `
 		UPDATE api_configs

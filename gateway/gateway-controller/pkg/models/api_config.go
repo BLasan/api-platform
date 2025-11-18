@@ -36,31 +36,75 @@ const (
 
 // StoredAPIConfig represents the configuration stored in the database and in-memory
 type StoredAPIConfig struct {
-	ID              string                    `json:"id"`
-	Configuration   api.APIConfiguration      `json:"configuration"`
-	Status          ConfigStatus              `json:"status"`
-	CreatedAt       time.Time                 `json:"created_at"`
-	UpdatedAt       time.Time                 `json:"updated_at"`
-	DeployedAt      *time.Time                `json:"deployed_at,omitempty"`
-	DeployedVersion int64                     `json:"deployed_version"`
+	ID              string               `json:"id"`
+	Configuration   api.APIConfiguration `json:"configuration"`
+	Status          ConfigStatus         `json:"status"`
+	CreatedAt       time.Time            `json:"created_at"`
+	UpdatedAt       time.Time            `json:"updated_at"`
+	DeployedAt      *time.Time           `json:"deployed_at,omitempty"`
+	DeployedVersion int64                `json:"deployed_version"`
 }
 
 // GetCompositeKey returns the composite key "name:version" for indexing
 func (c *StoredAPIConfig) GetCompositeKey() string {
-	return fmt.Sprintf("%s:%s", c.Configuration.Data.Name, c.Configuration.Data.Version)
+	if c.Configuration.Kind == "async/websub" {
+		asyncData, err := c.Configuration.Data.AsWebhookAPIData()
+		if err != nil {
+			return ""
+		}
+		return fmt.Sprintf("%s:%s", asyncData.Name, asyncData.Version)
+	}
+	configData, err := c.Configuration.Data.AsAPIConfigData()
+	if err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%s:%s", configData.Name, configData.Version)
 }
 
 // GetAPIName returns the API name
 func (c *StoredAPIConfig) GetAPIName() string {
-	return c.Configuration.Data.Name
+	if c.Configuration.Kind == "async/websub" {
+		asyncData, err := c.Configuration.Data.AsWebhookAPIData()
+		if err != nil {
+			return ""
+		}
+		return asyncData.Name
+	}
+	configData, err := c.Configuration.Data.AsAPIConfigData()
+	if err != nil {
+		return ""
+	}
+	return configData.Name
 }
 
 // GetAPIVersion returns the API version
 func (c *StoredAPIConfig) GetAPIVersion() string {
-	return c.Configuration.Data.Version
+	if c.Configuration.Kind == "async/websub" {
+		asyncData, err := c.Configuration.Data.AsWebhookAPIData()
+		if err != nil {
+			return ""
+		}
+		return asyncData.Version
+	}
+	configData, err := c.Configuration.Data.AsAPIConfigData()
+	if err != nil {
+		return ""
+	}
+	return configData.Version
 }
 
 // GetContext returns the API context path
 func (c *StoredAPIConfig) GetContext() string {
-	return c.Configuration.Data.Context
+	if c.Configuration.Kind == "async/websub" {
+		asyncData, err := c.Configuration.Data.AsWebhookAPIData()
+		if err != nil {
+			return ""
+		}
+		return asyncData.Context
+	}
+	configData, err := c.Configuration.Data.AsAPIConfigData()
+	if err != nil {
+		return ""
+	}
+	return configData.Context
 }

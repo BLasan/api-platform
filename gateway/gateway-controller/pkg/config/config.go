@@ -38,6 +38,11 @@ type Config struct {
 	Router       RouterConfig       `koanf:"router"`
 	Logging      LoggingConfig      `koanf:"logging"`
 	ControlPlane ControlPlaneConfig `koanf:"controlplane"`
+	WebSubHub    WebSubHubConfig    `koanf:"websubhub"`
+}
+
+type WebSubHubConfig struct {
+	Enabled bool `koanf:"enabled"`
 }
 
 // ServerConfig holds server-related configuration
@@ -213,6 +218,7 @@ func getDefaults() map[string]interface{} {
 		"controlplane.reconnect_max":        "5m",
 		"controlplane.polling_interval":     "15m",
 		"controlplane.insecure_skip_verify": true, // Default true for dev environments with self-signed certs
+		"websubhub.enabled":                 true, // Enable WebSubHub features by default
 	}
 }
 

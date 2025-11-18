@@ -28,8 +28,8 @@ help: ## Show this help message
 
 docker: ## Build Router Docker image
 	@echo "Building Router Docker image..."
-	@docker build -t wso2/gateway-router:latest .
+	@docker build -t blasan/gateway-router:latest .
 
 clean: ## Clean Docker images
 	@echo "Cleaning Docker images..."
-	@docker rmi wso2/gateway-router:latest || true
+	@docker rmi blasan/gateway-router:latest || true

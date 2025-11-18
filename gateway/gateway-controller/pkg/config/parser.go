@@ -37,11 +37,21 @@ func NewParser() *Parser {
 // ParseYAML parses YAML content into an API configuration
 func (p *Parser) ParseYAML(data []byte) (*api.APIConfiguration, error) {
 	var config api.APIConfiguration
-
-	if err := yaml.Unmarshal(data, &config); err != nil {
-		return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	// Marshal the map to JSON to leverage json.RawMessage handling in union types
+	var intermediate map[string]interface{}
+	if err := yaml.Unmarshal(data, &intermediate); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal YAML: %w", err)
 	}
-
+	jsonBytes, err := json.Marshal(intermediate)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal intermediate to JSON: %w", err)
+	}
+	if err := json.Unmarshal(jsonBytes, &config); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal JSON into APIConfiguration: %w", err)
+	}
+	// if err := yaml.Unmarshal(data, &config); err != nil {
+	// 	return nil, fmt.Errorf("failed to parse YAML: %w", err)
+	// }
 	return &config, nil
 }
 
@@ -52,6 +62,11 @@ func (p *Parser) ParseJSON(data []byte) (*api.APIConfiguration, error) {
 	if err := json.Unmarshal(data, &config); err != nil {
 		return nil, fmt.Errorf("failed to parse JSON: %w", err)
 	}
+
+	// configInterface, err := apiConfigType.NewAPIConfiguration(&config)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to create API configuration interface: %w", err)
+	// }
 
 	return &config, nil
 }

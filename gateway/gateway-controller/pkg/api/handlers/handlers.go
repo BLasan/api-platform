@@ -19,12 +19,12 @@
 package handlers
 
 import (
-	"context"
 	"fmt"
-	"github.com/wso2/api-platform/gateway/gateway-controller/pkg/controlplane"
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/wso2/api-platform/gateway/gateway-controller/pkg/controlplane"
 
 	"github.com/gin-gonic/gin"
 	api "github.com/wso2/api-platform/gateway/gateway-controller/pkg/api/generated"
@@ -47,6 +47,7 @@ type APIServer struct {
 	logger             *zap.Logger
 	deploymentService  *utils.APIDeploymentService
 	controlPlaneClient controlplane.ControlPlaneClient
+	apiDataFactory     *config.APIDataFactory
 }
 
 // NewAPIServer creates a new API server with dependencies
@@ -66,6 +67,8 @@ func NewAPIServer(
 		logger:             logger,
 		deploymentService:  utils.NewAPIDeploymentService(store, db, snapshotManager),
 		controlPlaneClient: controlPlaneClient,
+		apiDataFactory:     config.NewAPIDataFactory(),
+		//configParserFactory: config.NewConfigParserFactory(),
 	}
 
 	// Register status update callback
@@ -87,6 +90,14 @@ func (s *APIServer) handleStatusUpdate(configID string, success bool, version in
 		log.Warn("Config not found for status update", zap.String("id", configID))
 		return
 	}
+
+	// // Use factory to parse config
+	// configParsed, err := s.configParserFactory.Parse(cfg)
+	// if err != nil {
+	// 	log.Error("Failed to parse config for status update", zap.Error(err), zap.String("id", configID))
+	// 	return
+	// }
+
 	now := time.Now()
 	if success {
 		cfg.Status = models.StatusDeployed
@@ -94,7 +105,7 @@ func (s *APIServer) handleStatusUpdate(configID string, success bool, version in
 		cfg.DeployedVersion = version
 		log.Info("API configuration deployed successfully",
 			zap.String("id", configID),
-			zap.String("name", cfg.Configuration.Data.Name),
+			zap.String("name", cfg.GetAPIName()),
 			zap.Int64("version", version))
 	} else {
 		cfg.Status = models.StatusFailed
@@ -102,7 +113,7 @@ func (s *APIServer) handleStatusUpdate(configID string, success bool, version in
 		cfg.DeployedVersion = 0
 		log.Error("API configuration deployment failed",
 			zap.String("id", configID),
-			zap.String("name", cfg.Configuration.Data.Name))
+			zap.String("name", cfg.GetAPIName()))
 	}
 
 	cfg.UpdatedAt = now
@@ -188,19 +199,26 @@ func (s *APIServer) CreateAPI(c *gin.Context) {
 func (s *APIServer) ListAPIs(c *gin.Context) {
 	configs := s.store.GetAll()
 
-	items := make([]api.APIListItem, len(configs))
-	for i, cfg := range configs {
+	items := make([]api.APIListItem, 0, len(configs))
+	for _, cfg := range configs {
+		// Use factory to parse config
+		// configParsed, err := s.configParserFactory.Parse(cfg)
+		// if err != nil {
+		// 	s.logger.Warn("Failed to parse config in list", zap.String("id", cfg.ID), zap.Error(err))
+		// 	continue
+		// }
+
 		id, _ := uuidToOpenAPIUUID(cfg.ID)
 		status := string(cfg.Status)
-		items[i] = api.APIListItem{
+		items = append(items, api.APIListItem{
 			Id:        id,
-			Name:      stringPtr(cfg.Configuration.Data.Name),
-			Version:   stringPtr(cfg.Configuration.Data.Version),
-			Context:   stringPtr(cfg.Configuration.Data.Context),
+			Name:      stringPtr(cfg.GetAPIName()),
+			Version:   stringPtr(cfg.GetAPIVersion()),
+			Context:   stringPtr(cfg.GetContext()),
 			Status:    (*api.APIListItemStatus)(&status),
 			CreatedAt: timePtr(cfg.CreatedAt),
 			UpdatedAt: timePtr(cfg.UpdatedAt),
-		}
+		})
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -264,118 +282,29 @@ func (s *APIServer) UpdateAPI(c *gin.Context, name string, version string) {
 		})
 		return
 	}
-
-	// Parse configuration
-	contentType := c.GetHeader("Content-Type")
-	apiConfig, err := s.parser.Parse(body, contentType)
-	if err != nil {
-		log.Error("Failed to parse configuration", zap.Error(err))
-		c.JSON(http.StatusBadRequest, api.ErrorResponse{
-			Status:  "error",
-			Message: "Failed to parse configuration",
-		})
-		return
-	}
-
-	// Validate configuration
-	validationErrors := s.validator.Validate(apiConfig)
-	if len(validationErrors) > 0 {
-		log.Warn("Configuration validation failed",
-			zap.String("name", apiConfig.Data.Name),
-			zap.Int("num_errors", len(validationErrors)))
-
-		errors := make([]api.ValidationError, len(validationErrors))
-		for i, e := range validationErrors {
-			errors[i] = api.ValidationError{
-				Field:   stringPtr(e.Field),
-				Message: stringPtr(e.Message),
-			}
-		}
-
-		c.JSON(http.StatusBadRequest, api.ErrorResponse{
-			Status:  "error",
-			Message: "Configuration validation failed",
-			Errors:  &errors,
-		})
-		return
-	}
-
-	// Check if config exists
-	existing, err := s.store.GetByNameVersion(name, version)
-	if err != nil {
-		log.Warn("API configuration not found",
-			zap.String("name", name),
-			zap.String("version", version))
-		c.JSON(http.StatusNotFound, api.ErrorResponse{
-			Status:  "error",
-			Message: fmt.Sprintf("API configuration with name '%s' and version '%s' not found", name, version),
-		})
-		return
-	}
-
-	// Update stored configuration
-	now := time.Now()
-	existing.Configuration = *apiConfig
-	existing.Status = models.StatusPending
-	existing.UpdatedAt = now
-	existing.DeployedAt = nil
-	existing.DeployedVersion = 0
-
-	// Atomic dual-write: database + in-memory
-	// Update database first (only if persistent mode)
-	if s.db != nil {
-		if err := s.db.UpdateConfig(existing); err != nil {
-			log.Error("Failed to update config in database", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, api.ErrorResponse{
-				Status:  "error",
-				Message: "Failed to persist configuration update",
-			})
-			return
-		}
-	}
-
-	if err := s.store.Update(existing); err != nil {
-		// Log conflict errors at info level, other errors at error level
-		if storage.IsConflictError(err) {
-			log.Info("API configuration name/version already exists",
-				zap.String("id", existing.ID),
-				zap.String("name", apiConfig.Data.Name),
-				zap.String("version", apiConfig.Data.Version))
-		} else {
-			log.Error("Failed to update config in memory store", zap.Error(err))
-		}
-		c.JSON(http.StatusConflict, api.ErrorResponse{
-			Status:  "error",
-			Message: err.Error(),
-		})
-		return
-	}
-
 	// Get correlation ID from context
 	correlationID := middleware.GetCorrelationID(c)
 
-	// Update xDS snapshot asynchronously
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if err := s.snapshotManager.UpdateSnapshot(ctx, correlationID); err != nil {
-			log.Error("Failed to update xDS snapshot", zap.Error(err))
-		}
-	}()
+	result, err := s.deploymentService.UpdateAPIConfiguration(name, version, utils.APIDeploymentParams{
+		Data:          body,
+		ContentType:   c.GetHeader("Content-Type"),
+		APIID:         "",
+		CorrelationID: correlationID,
+		Logger:        log,
+	})
 
 	log.Info("API configuration updated",
-		zap.String("id", existing.ID),
-		zap.String("name", apiConfig.Data.Name),
-		zap.String("version", apiConfig.Data.Version))
+		zap.String("id", result.StoredConfig.ID),
+		zap.String("name", result.StoredConfig.GetAPIName()),
+		zap.String("version", result.StoredConfig.GetAPIVersion()))
 
 	// Return success response
-	updateId, _ := uuidToOpenAPIUUID(existing.ID)
+	updateId, _ := uuidToOpenAPIUUID(result.StoredConfig.ID)
 	c.JSON(http.StatusOK, api.APIUpdateResponse{
 		Status:    stringPtr("success"),
 		Message:   stringPtr("API configuration updated successfully"),
 		Id:        updateId,
-		UpdatedAt: timePtr(existing.UpdatedAt),
+		UpdatedAt: timePtr(result.StoredConfig.UpdatedAt),
 	})
 }
 
@@ -384,59 +313,27 @@ func (s *APIServer) UpdateAPI(c *gin.Context, name string, version string) {
 func (s *APIServer) DeleteAPI(c *gin.Context, name string, version string) {
 	// Get correlation-aware logger from context
 	log := middleware.GetLogger(c, s.logger)
-
-	// Check if config exists
-	cfg, err := s.store.GetByNameVersion(name, version)
-	if err != nil {
-		log.Warn("API configuration not found",
-			zap.String("name", name),
-			zap.String("version", version))
-		c.JSON(http.StatusNotFound, api.ErrorResponse{
-			Status:  "error",
-			Message: fmt.Sprintf("API configuration with name '%s' and version '%s' not found", name, version),
-		})
-		return
-	}
-
-	// Delete from database first (only if persistent mode)
-	if s.db != nil {
-		if err := s.db.DeleteConfig(cfg.ID); err != nil {
-			log.Error("Failed to delete config from database", zap.Error(err))
-			c.JSON(http.StatusInternalServerError, api.ErrorResponse{
-				Status:  "error",
-				Message: "Failed to delete configuration",
-			})
-			return
-		}
-	}
-
-	// Delete from in-memory store
-	if err := s.store.Delete(cfg.ID); err != nil {
-		log.Error("Failed to delete config from memory store", zap.Error(err))
-		c.JSON(http.StatusInternalServerError, api.ErrorResponse{
-			Status:  "error",
-			Message: "Failed to delete configuration",
-		})
-		return
-	}
-
 	// Get correlation ID from context
 	correlationID := middleware.GetCorrelationID(c)
+	_, err := s.deploymentService.UndeployAPIConfiguration(name, version, utils.APIDeploymentParams{
+		Data:          nil,
+		ContentType:   c.GetHeader("Content-Type"),
+		APIID:         "",
+		CorrelationID: correlationID,
+		Logger:        log,
+	})
 
-	// Update xDS snapshot asynchronously
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		if err := s.snapshotManager.UpdateSnapshot(ctx, correlationID); err != nil {
-			log.Error("Failed to update xDS snapshot", zap.Error(err))
-		}
-	}()
-
-	log.Info("API configuration deleted",
-		zap.String("id", cfg.ID),
-		zap.String("name", cfg.Configuration.Data.Name),
-		zap.String("version", cfg.Configuration.Data.Version))
+	if err != nil {
+		log.Error("Failed to undeploy API configuration",
+			zap.String("name", name),
+			zap.String("version", version),
+			zap.Error(err))
+		c.JSON(http.StatusBadRequest, api.ErrorResponse{
+			Status:  "error",
+			Message: err.Error(),
+		})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"status":  "success",
@@ -476,10 +373,18 @@ func (s *APIServer) waitForDeploymentAndNotify(configID string, correlationID st
 			}
 
 			if cfg.Status == models.StatusDeployed {
-				// API successfully deployed, notify platform API
+				apiData, err := s.apiDataFactory.FromConfiguration(&cfg.Configuration)
+				if err != nil {
+					log.Error("Failed to extract API data in waitForDeploymentAndNotify",
+						zap.String("config_id", configID),
+						zap.Error(err))
+					return
+				}
+
+				// // API successfully deployed, notify platform API
 				log.Info("API deployed successfully, notifying platform API",
 					zap.String("config_id", configID),
-					zap.String("name", cfg.Configuration.Data.Name))
+					zap.String("name", apiData.GetName()))
 
 				// Extract API ID from stored config (use config ID as API ID)
 				apiID := configID
@@ -498,9 +403,17 @@ func (s *APIServer) waitForDeploymentAndNotify(configID string, correlationID st
 				return
 
 			} else if cfg.Status == models.StatusFailed {
+				apiData, err := s.apiDataFactory.FromConfiguration(&cfg.Configuration)
+				if err != nil {
+					log.Error("Failed to extract API data in waitForDeploymentAndNotify",
+						zap.String("config_id", configID),
+						zap.Error(err))
+					return
+				}
+
 				log.Warn("API deployment failed, skipping platform API notification",
 					zap.String("config_id", configID),
-					zap.String("name", cfg.Configuration.Data.Name))
+					zap.String("name", apiData.GetName()))
 				return
 			}
 			// Continue waiting if status is still pending

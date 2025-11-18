@@ -62,21 +62,25 @@ func createTestConfig(name, version string) *models.StoredAPIConfig {
 		ID: uuid.New().String(),
 		Configuration: api.APIConfiguration{
 			Version: api.ApiPlatformWso2Comv1,
-			Kind:    api.Httprest,
-			Data: api.APIConfigData{
-				Name:    name,
-				Version: version,
-				Context: "/" + name,
-				Upstream: []api.Upstream{
-					{Url: "http://example.com"},
-				},
-				Operations: []api.Operation{
-					{
-						Method: api.GET,
-						Path:   "/test",
+			Kind:    api.APIConfigurationKindHttprest,
+			Data: func() api.APIConfiguration_Data {
+				var d api.APIConfiguration_Data
+				_ = d.FromAPIConfigData(api.APIConfigData{
+					Name:    name,
+					Version: version,
+					Context: "/" + name,
+					Upstream: []api.Upstream{
+						{Url: "http://example.com"},
 					},
-				},
-			},
+					Operations: []api.Operation{
+						{
+							Method: api.GET,
+							Path:   "/test",
+						},
+					},
+				})
+				return d
+			}(),
 		},
 		Status:          models.StatusPending,
 		DeployedVersion: 0,
