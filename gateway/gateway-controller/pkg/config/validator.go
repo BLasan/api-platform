@@ -433,7 +433,7 @@ func (v *Validator) validatePathParametersForAsyncAPIs(path string) bool {
 
 	openCount := strings.Count(path, "{")
 	closeCount := strings.Count(path, "}")
-	return openCount == 0 && closeCount == 0 && strings.Contains(path, "webhooks_events_receiver_resource")
+	return openCount == 0 && closeCount == 0
 }
 
 // validateQueryParametersForAsyncAPIs checks that the path contains a query string with a non-empty 'type' parameter.

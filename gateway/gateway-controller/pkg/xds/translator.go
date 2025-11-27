@@ -71,89 +71,89 @@ func NewTranslator(logger *zap.Logger, accessLogConfig config.AccessLogsConfig) 
 	}
 }
 
-// // TranslateConfigs translates all API configurations to Envoy resources
-// // The correlationID parameter is optional and used for request tracing in logs
-// func (t *Translator) TranslateConfigs(configs []*models.StoredAPIConfig, correlationID string) (map[resource.Type][]types.Resource, error) {
-// 	// Create a logger with correlation ID if provided
-// 	log := t.logger
-// 	if correlationID != "" {
-// 		log = t.logger.With(zap.String("correlation_id", correlationID))
-// 	}
+// TranslateConfigs translates all API configurations to Envoy resources
+// The correlationID parameter is optional and used for request tracing in logs
+func (t *Translator) TranslateConfigs(configs []*models.StoredAPIConfig, correlationID string) (map[resource.Type][]types.Resource, error) {
+	// Create a logger with correlation ID if provided
+	log := t.logger
+	if correlationID != "" {
+		log = t.logger.With(zap.String("correlation_id", correlationID))
+	}
 
-// 	resources := make(map[resource.Type][]types.Resource)
+	resources := make(map[resource.Type][]types.Resource)
 
-// 	var listeners []types.Resource
-// 	var routes []types.Resource
-// 	var clusters []types.Resource
+	var listeners []types.Resource
+	var routes []types.Resource
+	var clusters []types.Resource
 
-// 	// We'll use a single listener on port 8080 with a single virtual host
-// 	// All API routes are consolidated into one virtual host to avoid wildcard domain conflicts
-// 	allRoutes := make([]*route.Route, 0)
-// 	clusterMap := make(map[string]*cluster.Cluster)
+	// We'll use a single listener on port 8080 with a single virtual host
+	// All API routes are consolidated into one virtual host to avoid wildcard domain conflicts
+	allRoutes := make([]*route.Route, 0)
+	clusterMap := make(map[string]*cluster.Cluster)
 
-// 	for _, cfg := range configs {
-// 		// Include ALL configs (both deployed and pending) in the snapshot
-// 		// This ensures existing APIs are not overridden when deploying new APIs
+	for _, cfg := range configs {
+		// Include ALL configs (both deployed and pending) in the snapshot
+		// This ensures existing APIs are not overridden when deploying new APIs
 
-// 		// Create routes and clusters for this API
-// 		routesList, clusterList, err := t.translateAPIConfig(cfg)
-// 		if err != nil {
-// 			log.Error("Failed to translate config",
-// 				zap.String("id", cfg.ID),
-// 				zap.String("name", cfg.GetAPIName()),
-// 				zap.Error(err))
-// 			continue
-// 		}
+		// Create routes and clusters for this API
+		routesList, clusterList, err := t.translateAPIConfig(cfg)
+		if err != nil {
+			log.Error("Failed to translate config",
+				zap.String("id", cfg.ID),
+				zap.String("name", cfg.GetAPIName()),
+				zap.Error(err))
+			continue
+		}
 
-// 		allRoutes = append(allRoutes, routesList...)
+		allRoutes = append(allRoutes, routesList...)
 
-// 		// Add clusters (avoiding duplicates)
-// 		for _, c := range clusterList {
-// 			clusterMap[c.Name] = c
-// 		}
-// 	}
+		// Add clusters (avoiding duplicates)
+		for _, c := range clusterList {
+			clusterMap[c.Name] = c
+		}
+	}
 
-// 	// Add a catch-all route that returns 404 for unmatched requests
-// 	// This should be the last route (lowest priority)
-// 	allRoutes = append(allRoutes, &route.Route{
-// 		Match: &route.RouteMatch{
-// 			PathSpecifier: &route.RouteMatch_Prefix{
-// 				Prefix: "/",
-// 			},
-// 		},
-// 		Action: &route.Route_DirectResponse{
-// 			DirectResponse: &route.DirectResponseAction{
-// 				Status: 404,
-// 			},
-// 		},
-// 	})
+	// Add a catch-all route that returns 404 for unmatched requests
+	// This should be the last route (lowest priority)
+	allRoutes = append(allRoutes, &route.Route{
+		Match: &route.RouteMatch{
+			PathSpecifier: &route.RouteMatch_Prefix{
+				Prefix: "/",
+			},
+		},
+		Action: &route.Route_DirectResponse{
+			DirectResponse: &route.DirectResponseAction{
+				Status: 404,
+			},
+		},
+	})
 
-// 	// Create a single virtual host with all routes
-// 	virtualHost := &route.VirtualHost{
-// 		Name:    "all_apis",
-// 		Domains: []string{"*"},
-// 		Routes:  allRoutes,
-// 	}
+	// Create a single virtual host with all routes
+	virtualHost := &route.VirtualHost{
+		Name:    "all_apis",
+		Domains: []string{"*"},
+		Routes:  allRoutes,
+	}
 
-// 	// Always create the listener, even with no APIs deployed
-// 	l, err := t.createListener([]*route.VirtualHost{virtualHost})
+	// Always create the listener, even with no APIs deployed
+	l, err := t.createListener([]*route.VirtualHost{virtualHost})
 
-// 	if err != nil {
-// 		return nil, fmt.Errorf("failed to create listener: %w", err)
-// 	}
-// 	listeners = append(listeners, l)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create listener: %w", err)
+	}
+	listeners = append(listeners, l)
 
-// 	// Add all clusters
-// 	for _, c := range clusterMap {
-// 		clusters = append(clusters, c)
-// 	}
+	// Add all clusters
+	for _, c := range clusterMap {
+		clusters = append(clusters, c)
+	}
 
-// 	resources[resource.ListenerType] = listeners
-// 	resources[resource.RouteType] = routes
-// 	resources[resource.ClusterType] = clusters
+	resources[resource.ListenerType] = listeners
+	resources[resource.RouteType] = routes
+	resources[resource.ClusterType] = clusters
 
-// 	return resources, nil
-// }
+	return resources, nil
+}
 
 // TranslateConfigs translates all Async API configurations to Envoy resources
 // The correlationID parameter is optional and used for request tracing in logs
@@ -298,34 +298,38 @@ func (t *Translator) translateAsyncAPIConfig(cfg *models.StoredAPIConfig) ([]*ro
 	return routesList, []*cluster.Cluster{c}, nil
 }
 
-// // translateAPIConfig translates a single API configuration
-// func (t *Translator) translateAPIConfig(cfg *models.StoredAPIConfig) ([]*route.Route, []*cluster.Cluster, error) {
-// 	apiData := cfg.Configuration.Data
+// translateAPIConfig translates a single API configuration
+func (t *Translator) translateAPIConfig(cfg *models.StoredAPIConfig) ([]*route.Route, []*cluster.Cluster, error) {
+	apiData, err := cfg.Configuration.Data.AsAPIConfigData()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to parse API config data: %w", err)
+	}
 
-// 	// Parse upstream URL
-// 	if len(apiData.Servers) == 0 {
-// 		return nil, nil, fmt.Errorf("no upstream configured")
-// 	}
+	// Parse upstream URL
+	if len(apiData.Upstream) == 0 {
+		return nil, nil, fmt.Errorf("no upstream configured")
+	}
 
-// 	upstreamURL := apiData.Servers[0].Url
-// 	parsedURL, err := url.Parse(upstreamURL)
-// 	if err != nil {
-// 		return nil, nil, fmt.Errorf("invalid upstream URL: %w", err)
-// 	}
+	upstreamURL := apiData.Upstream[0].Url
+	parsedURL, err := url.Parse(upstreamURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid upstream URL: %w", err)
+	}
 
-// 	// Create cluster for this upstream
-// 	clusterName := t.sanitizeClusterName(parsedURL.Host)
-// 	c := t.createCluster(WebSubHubInternalClusterName, parsedURL)
+	// Create cluster for this upstream
+	clusterName := t.sanitizeClusterName(parsedURL.Host)
+	// @TODO: Handle upstream certificates and pass them to createCluster
+	c := t.createCluster(clusterName, parsedURL)
 
-// 	// Create routes for each operation
-// 	routesList := make([]*route.Route, 0)
-// 	for _, op := range apiData.Operations {
-// 		r := t.createRoute(string(op.Method), apiData.Context+op.Path, clusterName, parsedURL.Path)
-// 		routesList = append(routesList, r)
-// 	}
+	// Create routes for each operation
+	routesList := make([]*route.Route, 0)
+	for _, op := range apiData.Operations {
+		r := t.createRoute(string(op.Method), op.Path, clusterName, parsedURL.Path)
+		routesList = append(routesList, r)
+	}
 
-// 	return routesList, []*cluster.Cluster{c}, nil
-// }
+	return routesList, []*cluster.Cluster{c}, nil
+}
 
 // createListener creates an Envoy listener with access logging
 func (t *Translator) createListener(virtualHosts []*route.VirtualHost) (*listener.Listener, error) {
