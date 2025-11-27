@@ -30,7 +30,6 @@ generate: ## Generate API server code from OpenAPI spec
 	@echo "Generating API server code from OpenAPI spec..."
 	@go install github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
 	@go tool oapi-codegen -config=oapi-codegen.yaml api/openapi.yaml
-# 	@go tool oapi-codegen -config=oapi-codegen-websub.yaml api/asyncapi.yaml
 
 # generate-websub: ## Generate WebSub API server code from OpenAPI spec
 # 	@echo "Generating WebSub API server code from OpenAPI spec..."
