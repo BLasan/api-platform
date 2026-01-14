@@ -627,7 +627,9 @@ func (s *APIServer) UpdateAPI(c *gin.Context, id string) {
 					childWg.Add(1)
 					go func(topic string) {
 						defer childWg.Done()
-						if err := s.deploymentService.RegisterTopicWithHub(s.httpClient, topic, "localhost", 8083, log); err != nil {
+						ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.routerConfig.EventGateway.TimeoutSeconds)*time.Second)
+						defer cancel()
+						if err := s.deploymentService.RegisterTopicWithHub(ctx, s.httpClient, topic, s.routerConfig.EventGateway.RouterHost, s.routerConfig.EventGateway.WebSubHubListenerPort, log); err != nil {
 							log.Error("Failed to register topic with WebSubHub",
 								zap.Error(err),
 								zap.String("topic", topic),
@@ -654,7 +656,9 @@ func (s *APIServer) UpdateAPI(c *gin.Context, id string) {
 					childWg.Add(1)
 					go func(topic string) {
 						defer childWg.Done()
-						if err := s.deploymentService.UnregisterTopicWithHub(s.httpClient, topic, "localhost", 8083, log); err != nil {
+						ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.routerConfig.EventGateway.TimeoutSeconds)*time.Second)
+						defer cancel()
+						if err := s.deploymentService.UnregisterTopicWithHub(ctx, s.httpClient, topic, s.routerConfig.EventGateway.RouterHost, s.routerConfig.EventGateway.WebSubHubListenerPort, log); err != nil {
 							log.Error("Failed to deregister topic from WebSubHub",
 								zap.Error(err),
 								zap.String("topic", topic),
@@ -728,7 +732,7 @@ func (s *APIServer) UpdateAPI(c *gin.Context, id string) {
 
 	// Update xDS snapshot asynchronously
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(s.routerConfig.EventGateway.TimeoutSeconds)*time.Second)
 		defer cancel()
 
 		if err := s.snapshotManager.UpdateSnapshot(ctx, correlationID); err != nil {
@@ -886,7 +890,9 @@ func (s *APIServer) DeleteAPI(c *gin.Context, id string) {
 					childWg.Add(1)
 					go func(topic string) {
 						defer childWg.Done()
-						if err := s.deploymentService.UnregisterTopicWithHub(s.httpClient, topic, "localhost", 8083, log); err != nil {
+						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+						defer cancel()
+						if err := s.deploymentService.UnregisterTopicWithHub(ctx, s.httpClient, topic, s.routerConfig.EventGateway.RouterHost, s.routerConfig.EventGateway.WebSubHubListenerPort, log); err != nil {
 							log.Error("Failed to deregister topic from WebSubHub",
 								zap.Error(err),
 								zap.String("topic", topic),
