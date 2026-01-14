@@ -1750,9 +1750,7 @@ components:
           example: RestApi
           enum:
             - RestApi
-            - async/websub
-            - async/websocket
-            - async/sse
+            - WebSubApi
         metadata:
           $ref: "#/components/schemas/Metadata"
         spec:
@@ -1963,13 +1961,13 @@ components:
     WebhookAPIData:
       type: object
       required:
-        - name
+        - displayName
         - version
         - context
         - upstream
         - channels
       properties:
-        name:
+        displayName:
           type: string
           description: Human-readable API name (must be URL-friendly - only letters, numbers, spaces, hyphens, underscores, and dots allowed)
           minLength: 1
